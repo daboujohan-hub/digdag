@@ -1,0 +1,82 @@
+name: Construire l'APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Choisir la version de Java selon Capacitor
+        id: v
+        run: |
+          MAJOR=$(node -e "const p=require('./package.json');const v=(p.dependencies||{})['@capacitor/core']||(p.devDependencies||{})['@capacitor/core']||'6';console.log(parseInt(v.replace(/[^0-9.]/g,'').split('.')[0]))")
+          if [ "$MAJOR" -ge 7 ]; then echo "java=21" >> "$GITHUB_OUTPUT"; else echo "java=17" >> "$GITHUB_OUTPUT"; fi
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ steps.v.outputs.java }}
+
+      - run: npm ci
+
+      - name: Intégrer le plugin et le service mesh dans le projet Android
+        run: |
+          APPID=$(node -p "require('./capacitor.config.json').appId")
+          DIR="android/app/src/main/java/$(echo "$APPID" | tr . /)"
+          mkdir -p "$DIR"
+          rm -f "$DIR/MeshPlugin.kt"
+          for F in MeshPlugin.java MeshService.java MainActivity.java; do
+            sed "s/^package .*/package $APPID;/" "$F" > "$DIR/$F"
+          done
+          grep -q play-services-nearby android/app/build.gradle || \
+            sed -i "0,/^dependencies {/s//dependencies {\n    implementation 'com.google.android.gms:play-services-nearby:19.3.0'/" android/app/build.gradle
+          python3 - <<'PY'
+          p = "android/app/src/main/AndroidManifest.xml"
+          s = open(p, encoding="utf-8").read()
+          perms = [
+              ("BLUETOOTH", ' android:maxSdkVersion="30"'),
+              ("BLUETOOTH_ADMIN", ' android:maxSdkVersion="30"'),
+              ("ACCESS_WIFI_STATE", ""),
+              ("CHANGE_WIFI_STATE", ""),
+              ("ACCESS_COARSE_LOCATION", ' android:maxSdkVersion="32"'),
+              ("ACCESS_FINE_LOCATION", ' android:maxSdkVersion="32"'),
+              ("BLUETOOTH_ADVERTISE", ' android:minSdkVersion="31"'),
+              ("BLUETOOTH_CONNECT", ' android:minSdkVersion="31"'),
+              ("BLUETOOTH_SCAN", ' android:minSdkVersion="31"'),
+              ("NEARBY_WIFI_DEVICES", ' android:minSdkVersion="32"'),
+              ("FOREGROUND_SERVICE", ""),
+              ("FOREGROUND_SERVICE_CONNECTED_DEVICE", ""),
+              ("POST_NOTIFICATIONS", ""),
+              ("REQUEST_IGNORE_BATTERY_OPTIMIZATIONS", ""),
+          ]
+          add = "".join('    <uses-permission android:name="android.permission.%s"%s/>\n' % (n, a)
+                        for n, a in perms if 'android.permission.%s"' % n not in s)
+          if add:
+              s = s.replace("<application", add + "    <application", 1)
+          if "MeshService" not in s:
+              s = s.replace("</application>",
+                  '        <service android:name=".MeshService" android:exported="false" android:foregroundServiceType="connectedDevice" />\n    </application>', 1)
+          open(p, "w", encoding="utf-8").write(s)
+          PY
+
+      - run: npx cap sync android
+
+      - name: Compiler l'APK
+        working-directory: android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleDebug
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk

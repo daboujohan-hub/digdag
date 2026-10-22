@@ -27,25 +27,48 @@ button:focus-visible,input:focus-visible{outline:3px solid #7cc4b0;outline-offse
 #f .r{display:flex;gap:8px}
 #c{color:var(--mute);font-size:12px;text-align:right}
 input{font:inherit;flex:1;min-width:0;padding:10px 12px;border:1px solid var(--line);border-radius:12px}
-#to{font-family:ui-monospace,Menlo,Consolas,monospace;text-transform:uppercase}
+#to{font-family:ui-monospace,Menlo,Consolas,monospace}#to:not(:placeholder-shown){text-transform:uppercase}#me:empty{display:none}
 #setup{position:fixed;inset:0;background:var(--bg);display:flex;align-items:center;justify-content:center;padding:24px}
 #setup form{display:flex;flex-direction:column;gap:8px;background:#fff;border-radius:16px;padding:20px;width:100%;max-width:340px}
 #setup h2{margin:0;font-size:19px}
 #setup p{margin:0;color:var(--mute);font-size:14px}
 .hide{display:none!important}
+#qb{position:fixed;inset:0;background:var(--bg);display:flex;flex-direction:column;gap:10px;align-items:center;padding:calc(16px + env(safe-area-inset-top,0)) 16px calc(16px + env(safe-area-inset-bottom,0));overflow-y:auto}
+#qb .tabs{display:flex;gap:8px}
+#qb .row{display:flex;gap:8px;width:100%;max-width:340px}
+#qb footer{font-size:12px;color:var(--mute);text-align:center;margin-top:auto}
+button.o{background:#fff;color:var(--ink);border:1px solid var(--line)}
+button.o[aria-pressed=true]{background:var(--me);color:#fff;border-color:var(--me)}
+#qr{background:#fff;border-radius:12px;padding:8px;max-width:100%}
+#qcap,#qs{text-align:center;color:var(--mute);font-size:14px;max-width:320px;margin:0}
+#qs{color:var(--ink);font-weight:600}
 </style>
 </head>
 <body>
 <header>
   <div class="t"><h1>Messagerie</h1><div id="state" aria-live="polite"></div></div>
+  <button class="o" id="cb" type="button">Contacts</button>
   <div id="me" title="Ton identifiant : donne-le à tes contacts"></div>
 </header>
 <div id="list"></div>
 <form id="f">
-  <input id="to" placeholder="ID du destinataire (10 caractères)" required maxlength="10" pattern="[A-Za-z0-9]{10}" autocomplete="off" aria-label="Identifiant du destinataire">
+  <input id="to" placeholder="ID du destinataire" required maxlength="10" pattern="[A-Za-z0-9]{10}" autocomplete="off" aria-label="Identifiant du destinataire">
   <div class="r"><input id="t" placeholder="Message chiffré" maxlength="200" autocomplete="off" aria-label="Message"><button>Envoyer</button></div>
   <small id="c">0/200</small>
 </form>
+
+<div id="qb" class="hide" role="dialog" aria-label="Contacts et invitations">
+  <div class="tabs"><button class="o" id="tc" type="button">Mon contact</button><button class="o" id="ti" type="button">Inviter</button></div>
+  <canvas id="qr" width="10" height="10" aria-label="QR code"></canvas>
+  <p id="qcap"></p>
+  <button class="o" id="cp" type="button">Copier mon code contact</button>
+  <button id="sc" type="button">Scanner un contact</button>
+  <button class="o" id="bk" type="button">Rester actif en arrière-plan</button>
+  <div class="row"><input id="pc" placeholder="Ou colle un code contact" aria-label="Code contact"><button id="pa" type="button">Ajouter</button></div>
+  <p id="qs" aria-live="polite"></p>
+  <button class="o" id="qx" type="button">Fermer</button>
+  <footer>Développé par daboujohan · daboujohan-hub.github.io</footer>
+</div>
 
 <div id="setup" class="hide">
   <form id="sf">
@@ -72,6 +95,87 @@ const Mesh=window.Capacitor&&Capacitor.Plugins&&Capacitor.Plugins.Mesh;
 let peers=0,PRIV=null;
 const keys=new Map(),EC={name:"ECDH",namedCurve:"P-256"};
 
+/* ---------- QR code (octets, niveau L, versions 1 à 10) ---------- */
+function QR(text){
+  const data=Array.from(new TextEncoder().encode(text));
+  const T=[0,[7,1,19,0,0],[10,1,34,0,0],[15,1,55,0,0],[20,1,80,0,0],[26,1,108,0,0],[18,2,68,0,0],[20,2,78,0,0],[24,2,97,0,0],[30,2,116,0,0],[18,2,68,2,69]];
+  const AP=[0,[],[6,18],[6,22],[6,26],[6,30],[6,34],[6,22,38],[6,24,42],[6,26,46],[6,28,50]];
+  const cap=v=>T[v][1]*T[v][2]+T[v][3]*T[v][4];
+  let v=1;while(v<=10&&data.length>cap(v)-(v<10?2:3))v++;
+  if(v>10)throw new Error("Texte trop long pour le QR");
+  const bits=[],put=(x,n)=>{for(let i=n-1;i>=0;i--)bits.push((x>>>i)&1)};
+  put(4,4);put(data.length,v<10?8:16);data.forEach(b=>put(b,8));
+  const total=cap(v)*8;put(0,Math.min(4,total-bits.length));
+  while(bits.length%8)bits.push(0);
+  for(let p=0xEC;bits.length<total;p^=0xEC^0x11)put(p,8);
+  const cw=[];for(let i=0;i<bits.length;i+=8)cw.push(parseInt(bits.slice(i,i+8).join(""),2));
+  // Reed-Solomon sur GF(256)
+  const ex=new Array(512),lg=new Array(256);
+  for(let i=0,x=1;i<255;i++){ex[i]=x;lg[x]=i;x<<=1;if(x&256)x^=0x11D}
+  for(let i=255;i<512;i++)ex[i]=ex[i-255];
+  const mul=(a,b)=>a&&b?ex[lg[a]+lg[b]]:0;
+  const [ecc,n1,d1,n2,d2]=T[v];
+  let g=[1];for(let i=0;i<ecc;i++){const h=new Array(g.length+1).fill(0);g.forEach((c,j)=>{h[j]^=c;h[j+1]^=mul(c,ex[i])});g=h}
+  const rem=d=>{const r=new Array(ecc).fill(0);d.forEach(b=>{const f=b^r.shift();r.push(0);if(f)for(let i=0;i<ecc;i++)r[i]^=mul(g[i+1],f)});return r};
+  const blocks=[];let pos=0;
+  for(let i=0;i<n1+n2;i++){const len=i<n1?d1:d2,d=cw.slice(pos,pos+len);pos+=len;blocks.push({d,e:rem(d)})}
+  const out=[];
+  for(let i=0;i<Math.max(d1,d2);i++)blocks.forEach(b=>{if(i<b.d.length)out.push(b.d[i])});
+  for(let i=0;i<ecc;i++)blocks.forEach(b=>out.push(b.e[i]));
+  // matrice
+  const N=17+4*v,M=Array.from({length:N},()=>new Array(N).fill(false)),F=Array.from({length:N},()=>new Array(N).fill(false));
+  const set=(x,y,d)=>{M[y][x]=d;F[y][x]=true},bit=(x,i)=>((x>>>i)&1)!==0;
+  for(let i=0;i<N;i++){set(6,i,i%2===0);set(i,6,i%2===0)}
+  const finder=(cx,cy)=>{for(let dy=-4;dy<=4;dy++)for(let dx=-4;dx<=4;dx++){const x=cx+dx,y=cy+dy;if(x<0||y<0||x>=N||y>=N)continue;const d=Math.max(Math.abs(dx),Math.abs(dy));set(x,y,d!==2&&d!==4)}};
+  finder(3,3);finder(N-4,3);finder(3,N-4);
+  const ap=AP[v];
+  ap.forEach((cx,i)=>ap.forEach((cy,j)=>{
+    if((i===0&&j===0)||(i===0&&j===ap.length-1)||(i===ap.length-1&&j===0))return;
+    for(let dy=-2;dy<=2;dy++)for(let dx=-2;dx<=2;dx++)set(cx+dx,cy+dy,Math.max(Math.abs(dx),Math.abs(dy))!==1);
+  }));
+  const fmt=k=>{
+    const d=(1<<3)|k;let r=d;for(let i=0;i<10;i++)r=(r<<1)^((r>>>9)*0x537);
+    const b=((d<<10)|r)^0x5412;
+    for(let i=0;i<=5;i++)set(8,i,bit(b,i));
+    set(8,7,bit(b,6));set(8,8,bit(b,7));set(7,8,bit(b,8));
+    for(let i=9;i<15;i++)set(14-i,8,bit(b,i));
+    for(let i=0;i<8;i++)set(N-1-i,8,bit(b,i));
+    for(let i=8;i<15;i++)set(8,N-15+i,bit(b,i));
+    set(8,N-8,true);
+  };
+  fmt(0);
+  if(v>=7){let r=v;for(let i=0;i<12;i++)r=(r<<1)^((r>>>11)*0x1F25);const b=(v<<12)|r;
+    for(let i=0;i<18;i++){const a=N-11+i%3,c=Math.floor(i/3);set(a,c,bit(b,i));set(c,a,bit(b,i))}}
+  let i=0;
+  for(let right=N-1;right>=1;right-=2){
+    if(right===6)right=5;
+    for(let vert=0;vert<N;vert++)for(let j=0;j<2;j++){
+      const x=right-j,y=((right+1)&2)===0?N-1-vert:vert;
+      if(!F[y][x]&&i<out.length*8){M[y][x]=bit(out[i>>>3],7-(i&7));i++}
+    }
+  }
+  const MK=[(x,y)=>(x+y)%2===0,(x,y)=>y%2===0,(x,y)=>x%3===0,(x,y)=>(x+y)%3===0,(x,y)=>(Math.floor(x/3)+Math.floor(y/2))%2===0,(x,y)=>x*y%2+x*y%3===0,(x,y)=>(x*y%2+x*y%3)%2===0,(x,y)=>((x+y)%2+x*y%3)%2===0];
+  const mask=k=>{for(let y=0;y<N;y++)for(let x=0;x<N;x++)if(!F[y][x]&&MK[k](x,y))M[y][x]=!M[y][x]};
+  const pen=()=>{
+    let p=0;
+    for(const get of [(a,b)=>M[a][b],(a,b)=>M[b][a]])for(let a=0;a<N;a++){
+      let run=1,s="";
+      for(let b=0;b<N;b++){
+        s+=get(a,b)?"1":"0";
+        if(b&&get(a,b)===get(a,b-1)){run++;if(run===5)p+=3;else if(run>5)p++}else run=1;
+      }
+      const m=s.match(/10111010000|00001011101/g);if(m)p+=40*m.length;
+    }
+    for(let y=0;y<N-1;y++)for(let x=0;x<N-1;x++){const c=M[y][x];if(c===M[y][x+1]&&c===M[y+1][x]&&c===M[y+1][x+1])p+=3}
+    const dk=M.flat().filter(Boolean).length,t=N*N;
+    return p+10*(Math.ceil(Math.abs(dk*20-t*10)/t)-1);
+  };
+  let best=0,bp=1e9;
+  for(let k=0;k<8;k++){mask(k);fmt(k);const p=pen();if(p<bp){bp=p;best=k}mask(k)}
+  mask(best);fmt(best);
+  return M;
+}
+
 /* ---------- chiffrement : ECDH P-256 + HKDF + AES-GCM ---------- */
 // L'identifiant = empreinte de la clé publique : impossible d'annoncer une fausse clé pour un ID.
 const idOf=async pub=>Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256",b64d(pub))).slice(0,10),x=>AL[x%32]).join("");
@@ -89,7 +193,14 @@ async function seal(m){
   const iv=crypto.getRandomValues(new Uint8Array(12));
   const ct=await crypto.subtle.encrypt({name:"AES-GCM",iv,additionalData:aad(m)},await keyFor(m.to),enc(m.text));
   const p={t:"m",id:m.id,from:m.from,to:m.to,ts:m.ts,ttl:TTL,iv:b64e(iv),ct:b64e(ct)};
-  keep(p);m.st="p";save();render();flush();
+  m.st="p";m.pk=p;save();render();await push(m);
+}
+async function push(m){ // confie le paquet chiffré au service d'arrière-plan
+  try{
+    const r=await Mesh.send({data:JSON.stringify(m.pk)});
+    delete m.pk;if(r&&r.sent>0)m.st="s";
+  }catch(e){}
+  save();render();
 }
 async function open(p){ // 1 = ok, 0 = clé de l'expéditeur inconnue, -1 = rejeté
   if(!S.dir[p.from]||!S.dir[p.from].pub)return 0;
@@ -113,18 +224,16 @@ const valid=p=>p&&str(p.id,16)&&p.id.length>=8&&(p.t==="h"||p.t==="m")&&str(p.fr
    str(p.to,10)&&p.to.length===10&&str(p.iv,16)&&str(p.ct,1700));
 const pick=p=>p.t==="h"?{t:"h",id:p.id,from:p.from,name:p.name,pub:p.pub,ts:p.ts,ttl:p.ttl}:
   {t:"m",id:p.id,from:p.from,to:p.to,ts:p.ts,iv:p.iv,ct:p.ct,ttl:p.ttl};
-function tx(p){if(Mesh&&peers>0)Mesh.send({data:JSON.stringify(p)})}
-function keep(p){
-  const now=Date.now();
-  S.relay=S.relay.filter(r=>r.exp>now&&r.p.id!==p.id);
-  S.relay.push({p,exp:now+864e5});S.relay=S.relay.slice(-100);
-}
-function hello(){tx({t:"h",id:rid(12),from:S.me,name:S.name,pub:S.pub,ts:Date.now(),ttl:TTL})}
-function flush(){
-  if(peers<1)return;
-  S.relay.forEach(r=>tx(r.p));
-  S.msgs.forEach(m=>{if(m.st==="p")m.st="s"});
-  save();render();
+async function sync(){ // récupère ce que le service a reçu pendant que l'app était fermée ou en veille
+  if(!Mesh||!ready)return;
+  try{
+    for(const m of S.msgs.filter(x=>x.pk))await push(m);
+    const r=await Mesh.drain();
+    peers=r.n||0;
+    (r.sent||[]).forEach(id=>{const m=S.msgs.find(x=>x.id===id);if(m&&m.st==="p")m.st="s"});
+    for(const raw of r.packets||[])await onPacket(raw);
+    save();render();
+  }catch(e){}
 }
 async function onPacket(raw){
   try{
@@ -134,13 +243,10 @@ async function onPacket(raw){
     p=pick(p);
     if(p.t==="h"){
       if(p.from===S.me||await idOf(p.pub)!==p.from)return;
-      S.dir[p.from]={name:p.name,pub:p.pub};
-      if(p.ttl>0){const q={...p,ttl:p.ttl-1};keep(q);tx(q)}
+      const o=S.dir[p.from];S.dir[p.from]={name:o&&o.ok?o.name:p.name,pub:p.pub,ok:!!(o&&o.ok)};
       await retry(p.from);
     }else if(p.to===S.me){
       if(await open(p)===0){S.inbox.push(p);S.inbox=S.inbox.slice(-50)}
-    }else if(p.ttl>0){ // relais : le paquet reste chiffré, aucune clé nécessaire
-      const q={...p,ttl:p.ttl-1};keep(q);tx(q);
     }
     save();render();
   }catch(e){}
@@ -160,7 +266,7 @@ function render(){
     d.className="m"+(mine?" me":"")+(m.st==="p"||m.st==="k"?" w":"");
     const b=document.createElement("span");b.textContent=m.text;
     const s=document.createElement("small");
-    s.textContent=mine?"à "+m.to+" · "+hm(m.ts)+(lab[m.st]||""):((S.dir[m.from]||{}).name||m.from)+" · "+hm(m.ts);
+    s.textContent=mine?"à "+m.to+" · "+hm(m.ts)+(lab[m.st]||""):(q=>q&&q.name?(q.ok?"✓ ":"")+q.name:m.from)(S.dir[m.from])+" · "+hm(m.ts);
     d.append(b,s);l.append(d);
   });
   l.scrollTop=l.scrollHeight;
@@ -188,25 +294,69 @@ $("sf").onsubmit=async e=>{
   save();$("setup").classList.add("hide");render();boot(true);
 };
 
+/* ---------- contacts, QR code et invitations ---------- */
+const APP_URL="https://daboujohan-hub.github.io";
+const Scan=window.Capacitor&&Capacitor.Plugins&&Capacitor.Plugins.BarcodeScanner;
+const card=()=>"MSG1|"+S.me+"|"+S.name.replace(/\|/g,"")+"|"+S.pub;
+function draw(text){
+  const m=QR(text),n=m.length+8,sc=Math.max(3,Math.floor(Math.min(300,innerWidth-64)/n)),c=$("qr");
+  c.width=c.height=n*sc;
+  const x=c.getContext("2d");x.fillStyle="#fff";x.fillRect(0,0,c.width,c.height);x.fillStyle="#000";
+  m.forEach((r,y)=>r.forEach((d,i)=>{if(d)x.fillRect((i+4)*sc,(y+4)*sc,sc,sc)}));
+}
+function showQR(k){
+  $("tc").setAttribute("aria-pressed",k==="c");$("ti").setAttribute("aria-pressed",k==="i");
+  $("cp").classList.toggle("hide",k!=="c");
+  $("qcap").textContent=k==="c"?"Fais scanner ce code à ton contact (et scanne le sien) : vos messages seront chiffrés pour vous deux seulement.":"Fais scanner ce code pour télécharger l'application.";
+  try{draw(k==="c"?card():APP_URL)}catch(e){$("qcap").textContent="QR code impossible : "+e.message}
+}
+async function addCard(raw){
+  const [tag,id,name,pub]=String(raw).trim().split("|");
+  if(tag!=="MSG1"||!id||!name||!pub||pub.length!==88||name.length>30||id.length!==10)return "Code contact invalide.";
+  if(id===S.me)return "C'est ton propre code.";
+  try{if(await idOf(pub)!==id)return "Code falsifié : l'identifiant ne correspond pas à la clé."}catch(e){return "Code contact invalide."}
+  S.dir[id]={name,pub,ok:true};save();await retry(id);render();
+  return "Contact ajouté : "+name+" ✓";
+}
+$("cb").onclick=()=>{if(!S.me)return;$("qs").textContent="";$("pc").value="";$("qb").classList.remove("hide");showQR("c")};
+$("qx").onclick=()=>$("qb").classList.add("hide");
+$("tc").onclick=()=>showQR("c");$("ti").onclick=()=>showQR("i");
+$("cp").onclick=async()=>{try{await navigator.clipboard.writeText(card());$("qs").textContent="Code copié."}catch(e){$("qs").textContent="Copie impossible."}};
+$("pa").onclick=async()=>{$("qs").textContent=await addCard($("pc").value);$("pc").value=""};
+$("bk").onclick=async()=>{
+  if(!Mesh){$("qs").textContent="Disponible dans l'application installée.";return}
+  try{await Mesh.keepAlive();$("qs").textContent="Choisis « Autoriser » : l'app restera active écran éteint."}
+  catch(e){$("qs").textContent="Réglage indisponible sur ce téléphone."}
+};
+$("sc").onclick=async()=>{
+  if(!Scan){$("qs").textContent="Scanner indisponible ici : colle le code contact.";return}
+  try{
+    const r=await Scan.scan({formats:["QR_CODE"]}),v=r.barcodes&&r.barcodes[0]&&r.barcodes[0].rawValue;
+    $("qs").textContent=v?await addCard(v):"Aucun code lu.";
+  }catch(e){$("qs").textContent="Scan annulé ou indisponible."}
+};
+
 let ready=false,hooked=false;
 async function boot(ask){
   if(!Mesh||!S.me||ready)return;
   try{
-    const r=await Mesh.start({id:S.me,ask:!!ask});
+    const r=await Mesh.start({id:S.me,name:S.name,pub:S.pub,ask:!!ask});
     if(!r.ok)return;
     ready=true;
     if(!hooked){
       hooked=true;
       Mesh.addListener("packet",e=>onPacket(e.data));
-      Mesh.addListener("peer",e=>{const up=e.n>peers;peers=e.n;render();if(up){hello();flush()}});
+      Mesh.addListener("peer",e=>{peers=e.n;render()});
+      Mesh.addListener("sent",e=>{const m=S.msgs.find(x=>x.id===e.id);if(m&&m.st==="p"){m.st="s";save();render()}});
     }
+    sync();
   }catch(e){}
 }
-setInterval(()=>boot(false),5000);
-document.addEventListener("visibilitychange",()=>{if(!document.hidden)boot(false)});
+setInterval(()=>{boot(false);sync()},5000);
+document.addEventListener("visibilitychange",()=>{if(!document.hidden){boot(false);sync()}});
 
 (async()=>{
-  if(!crypto.subtle){$("state").textContent="Chiffrement indisponible ici";return}
+  if(!crypto.subtle){$("state").textContent="Chiffrement indisponible ici";const e=document.createElement("div");e.className="empty";e.textContent="Le chiffrement exige une connexion sécurisée. Ouvre l'application installée (APK) ou la page en https, pas le fichier directement.";$("list").append(e);return}
   if(S.jwk)PRIV=await crypto.subtle.importKey("jwk",S.jwk,EC,false,["deriveBits"]);
   if(!S.me)$("setup").classList.remove("hide");
   render();boot(true);
