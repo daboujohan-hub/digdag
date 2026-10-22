@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">DIG.DAG</string>
+    <string name="title_activity_main">DIG.DAG</string>
+    <string name="package_name">ci.aboudev.digdag</string>
+    <string name="custom_url_scheme">ci.aboudev.digdag</string>
+</resources>
