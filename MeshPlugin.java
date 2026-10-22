@@ -12,6 +12,7 @@ import android.os.Build;
 import android.provider.Settings;
 import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
+import androidx.core.content.FileProvider;
 import com.google.android.gms.common.GoogleApiAvailability;
 import com.getcapacitor.JSArray;
 import com.getcapacitor.JSObject;
@@ -19,6 +20,11 @@ import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
 import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.CapacitorPlugin;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -159,7 +165,45 @@ public class MeshPlugin extends Plugin implements MeshService.Sink {
             r.put("found", s.found);
             r.put("peers", s.peerCount());
             r.put("err", s.lastError);
+            r.put("relayed", s.relayed);
+            r.put("met", s.met.size());
         }
+        call.resolve(r);
+    }
+
+    /** Envoie l'APK de l'app installée (Bluetooth, Partage à proximité, WhatsApp...) : marche sans Internet. */
+    @PluginMethod
+    public void shareApp(PluginCall call) {
+        try {
+            Context c = getContext();
+            File src = new File(c.getApplicationInfo().sourceDir);
+            File dir = new File(c.getCacheDir(), "share");
+            dir.mkdirs();
+            File out = new File(dir, "Messagerie.apk");
+            try (InputStream in = new FileInputStream(src); OutputStream os = new FileOutputStream(out)) {
+                byte[] buf = new byte[65536];
+                int n;
+                while ((n = in.read(buf)) > 0) os.write(buf, 0, n);
+            }
+            Uri uri = FileProvider.getUriForFile(c, c.getPackageName() + ".fileprovider", out);
+            Intent i = new Intent(Intent.ACTION_SEND);
+            i.setType("application/vnd.android.package-archive");
+            i.putExtra(Intent.EXTRA_STREAM, uri);
+            i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            Intent chooser = Intent.createChooser(i, "Envoyer l'application");
+            chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            c.startActivity(chooser);
+            call.resolve();
+        } catch (Exception e) {
+            call.reject("partage impossible : " + e.getMessage());
+        }
+    }
+
+    /** Test interne : le service accepte-t-il ce paquet ? */
+    @PluginMethod
+    public void check(PluginCall call) {
+        JSObject r = new JSObject();
+        r.put("valid", MeshService.clean(call.getString("data")) != null);
         call.resolve(r);
     }
 

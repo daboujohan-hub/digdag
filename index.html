@@ -42,8 +42,8 @@ button.o[aria-pressed=true]{background:var(--me);color:#fff;border-color:var(--m
 #qr{background:#fff;border-radius:12px;padding:8px;max-width:100%}
 #qcap,#qs{text-align:center;color:var(--mute);font-size:14px;max-width:320px;margin:0}
 #qs{color:var(--ink);font-weight:600}
-#dg{font-size:12px;white-space:pre-wrap;background:#fff;border:1px solid var(--line);border-radius:10px;padding:8px;width:100%;max-width:340px;margin:0;font-family:ui-monospace,Menlo,Consolas,monospace}
-#dg:empty{display:none}
+#dg,#st{font-size:12px;white-space:pre-wrap;background:#fff;border:1px solid var(--line);border-radius:10px;padding:8px;width:100%;max-width:340px;margin:0;font-family:ui-monospace,Menlo,Consolas,monospace}
+#dg:empty,#st:empty{display:none}
 </style>
 </head>
 <body>
@@ -54,7 +54,8 @@ button.o[aria-pressed=true]{background:var(--me);color:#fff;border-color:var(--m
 </header>
 <div id="list"></div>
 <form id="f">
-  <input id="to" placeholder="ID du destinataire" required maxlength="10" pattern="[A-Za-z0-9]{10}" autocomplete="off" aria-label="Identifiant du destinataire">
+  <input id="to" placeholder="ID du destinataire" required maxlength="10" pattern="[A-Za-z0-9]{10}" autocomplete="off" list="cl" aria-label="Identifiant du destinataire">
+  <datalist id="cl"></datalist>
   <div class="r"><input id="t" placeholder="Message chiffré" maxlength="200" autocomplete="off" aria-label="Message"><button>Envoyer</button></div>
   <small id="c">0/200</small>
 </form>
@@ -64,12 +65,16 @@ button.o[aria-pressed=true]{background:var(--me);color:#fff;border-color:var(--m
   <canvas id="qr" width="10" height="10" aria-label="QR code"></canvas>
   <p id="qcap"></p>
   <button class="o" id="cp" type="button">Copier mon code contact</button>
+  <button id="sh" type="button">Envoyer l'application à quelqu'un</button>
   <button id="sc" type="button">Scanner un contact</button>
   <button class="o" id="bk" type="button">Rester actif en arrière-plan</button>
   <div class="row"><input id="pc" placeholder="Ou colle un code contact" aria-label="Code contact"><button id="pa" type="button">Ajouter</button></div>
   <p id="qs" aria-live="polite"></p>
   <button class="o" id="dgb" type="button">Diagnostic du réseau</button>
   <pre id="dg"></pre>
+  <button class="o" id="tb" type="button">Test interne</button>
+  <button class="o" id="stb" type="button">Statistiques</button>
+  <pre id="st"></pre>
   <button class="o" id="qx" type="button">Fermer</button>
   <footer>Développé par daboujohan · daboujohan-hub.github.io</footer>
 </div>
@@ -210,7 +215,7 @@ async function open(p){ // 1 = ok, 0 = clé de l'expéditeur inconnue, -1 = reje
   if(!S.dir[p.from]||!S.dir[p.from].pub)return 0;
   try{
     const pt=await crypto.subtle.decrypt({name:"AES-GCM",iv:b64d(p.iv),additionalData:aad(p)},await keyFor(p.from),b64d(p.ct));
-    S.msgs.push({id:p.id,from:p.from,to:p.to,text:dec(pt).slice(0,MAX),ts:p.ts,st:"r"});
+    S.msgs.push({id:p.id,from:p.from,to:p.to,text:dec(pt).slice(0,MAX),ts:p.ts,st:"r",hops:Math.max(0,TTL-p.ttl),got:Date.now()});
     S.msgs.sort((a,b)=>a.ts-b.ts);return 1;
   }catch(e){return -1}
 }
@@ -257,7 +262,15 @@ async function onPacket(raw){
 }
 
 /* ---------- interface ---------- */
+const tag=id=>"#"+id.slice(-4);
+const who=id=>{const q=S.dir[id];return q&&q.name?(q.ok?"✓ ":"")+q.name+" "+tag(id):id};
+const fmt=ms=>{const s=Math.max(0,Math.round(ms/1000));return s<60?s+" s":s<3600?Math.round(s/60)+" min":Math.floor(s/3600)+" h "+Math.round((s%3600)/60)+" min"};
+function fillList(){
+  const dl=$("cl");dl.textContent="";
+  Object.keys(S.dir).forEach(id=>{if(S.dir[id].pub&&id!==S.me){const o=document.createElement("option");o.value=id;o.label=(S.dir[id].name||"")+" "+tag(id);dl.append(o)}});
+}
 function render(){
+  fillList();
   const pend=S.msgs.filter(m=>m.st==="p"||m.st==="k").length,st=$("state");
   st.className=(!Mesh||peers>0)?"":"off";
   st.textContent=!Mesh?"Mode démo (navigateur)":peers>0?peers+" appareil"+(peers>1?"s":"")+" proche"+(peers>1?"s":""):"Aucun appareil proche"+(pend?" · "+pend+" en attente":"");
@@ -270,7 +283,7 @@ function render(){
     d.className="m"+(mine?" me":"")+(m.st==="p"||m.st==="k"?" w":"");
     const b=document.createElement("span");b.textContent=m.text;
     const s=document.createElement("small");
-    s.textContent=mine?"à "+m.to+" · "+hm(m.ts)+(lab[m.st]||""):(q=>q&&q.name?(q.ok?"✓ ":"")+q.name:m.from)(S.dir[m.from])+" · "+hm(m.ts);
+    s.textContent=mine?"à "+who(m.to)+" · "+hm(m.ts)+(lab[m.st]||""):who(m.from)+" · "+hm(m.ts)+(m.hops!=null?" · "+m.hops+" relais · "+fmt(m.got-m.ts):"");
     d.append(b,s);l.append(d);
   });
   l.scrollTop=l.scrollHeight;
@@ -310,7 +323,7 @@ function draw(text){
 }
 function showQR(k){
   $("tc").setAttribute("aria-pressed",k==="c");$("ti").setAttribute("aria-pressed",k==="i");
-  $("cp").classList.toggle("hide",k!=="c");
+  $("cp").classList.toggle("hide",k!=="c");$("sh").classList.toggle("hide",k!=="i");
   $("qcap").textContent=k==="c"?"Fais scanner ce code à ton contact (et scanne le sien) : vos messages seront chiffrés pour vous deux seulement.":"Fais scanner ce code pour télécharger l'application.";
   try{draw(k==="c"?card():APP_URL)}catch(e){$("qcap").textContent="QR code impossible : "+e.message}
 }
@@ -341,6 +354,60 @@ async function diag(){
       "Dernière erreur : "+(d.err||"aucune")].join("\n");
   }catch(e){el.textContent="Diagnostic indisponible (ancienne version du plugin) : "+e.message}
 }
+async function selfTest(){
+  const L=[],chk=(n,v)=>L.push((v?"OK     ":"ÉCHEC  ")+n);
+  try{
+    const gen=()=>crypto.subtle.generateKey(EC,true,["deriveBits"]);
+    const A=await gen(),B=await gen();
+    const raw=async k=>b64e(await crypto.subtle.exportKey("raw",k.publicKey));
+    const pa=await raw(A),pb=await raw(B);
+    const sk=async(priv,pub)=>{
+      const k=await crypto.subtle.importKey("raw",b64d(pub),EC,false,[]);
+      const bits=await crypto.subtle.deriveBits({name:"ECDH",public:k},priv,256);
+      const hk=await crypto.subtle.importKey("raw",bits,"HKDF",false,["deriveKey"]);
+      return crypto.subtle.deriveKey({name:"HKDF",hash:"SHA-256",salt:new Uint8Array(0),info:enc("mesh-v1")},hk,{name:"AES-GCM",length:256},false,["encrypt","decrypt"]);
+    };
+    const idA=await idOf(pa),idB=await idOf(pb);
+    chk("Identifiants de 10 caractères",idA.length===10&&idB.length===10&&idA!==idB);
+    const text="é".repeat(200),mid=rid(12),ts=Date.now(),iv=crypto.getRandomValues(new Uint8Array(12));
+    const ad=enc(mid+"|"+idA+"|"+idB+"|"+ts);
+    const ct=await crypto.subtle.encrypt({name:"AES-GCM",iv,additionalData:ad},await sk(A.privateKey,pb),enc(text));
+    const back=dec(await crypto.subtle.decrypt({name:"AES-GCM",iv,additionalData:ad},await sk(B.privateKey,pa),ct));
+    chk("Chiffrement puis déchiffrement (200 caractères)",back===text);
+    let bad=false;
+    try{await crypto.subtle.decrypt({name:"AES-GCM",iv,additionalData:enc(mid+"|"+idA+"|"+idB+"|"+(ts+1))},await sk(B.privateKey,pa),ct)}catch(e){bad=true}
+    chk("Paquet modifié rejeté",bad);
+    chk("QR code",QR("MSG1|"+idA+"|Test|"+pa).length>20);
+    if(Mesh){
+      const h=JSON.stringify({t:"h",id:rid(12),from:idA,name:"Test",pub:pa,ts,ttl:8});
+      const m=JSON.stringify({t:"m",id:mid,from:idA,to:idB,ts,ttl:8,iv:b64e(iv),ct:b64e(ct)});
+      chk("Le service réseau accepte une annonce",(await Mesh.check({data:h})).valid);
+      chk("Le service réseau accepte un message",(await Mesh.check({data:m})).valid);
+    }else L.push("--     Plugin réseau absent (mode démo)");
+  }catch(e){L.push("ÉCHEC  "+e.message)}
+  $("dg").textContent=L.join("\n");
+}
+async function stats(){
+  const rec=S.msgs.filter(m=>m.st==="r"),r=rec.filter(m=>m.hops!=null),mine=S.msgs.filter(m=>m.from===S.me);
+  const avg=a=>a.length?a.reduce((x,y)=>x+y,0)/a.length:0;
+  const L=["Messages reçus : "+rec.length,
+    "Relais traversés (moyenne / max) : "+avg(r.map(m=>m.hops)).toFixed(1)+" / "+Math.max(0,...r.map(m=>m.hops)),
+    "Délai d'arrivée moyen : "+fmt(avg(r.map(m=>m.got-m.ts)))+" (approximatif)",
+    "Messages envoyés : "+mine.length+" · transmis : "+mine.filter(m=>m.st==="s").length];
+  if(Mesh){try{const d=await Mesh.diag();L.push("Messages relayés par ce téléphone : "+(d.relayed||0),"Appareils rencontrés : "+(d.met||0))}catch(e){}}
+  $("st").textContent=L.join("\n");
+}
+$("tb").onclick=selfTest;$("stb").onclick=stats;
+$("sh").onclick=async()=>{
+  try{
+    if(Mesh){await Mesh.shareApp();$("qs").textContent="Choisis Bluetooth ou Partage à proximité pour envoyer l'application.";return}
+    if(navigator.share){await navigator.share({title:"Messagerie",text:"Télécharge l'application",url:APP_URL});return}
+    await navigator.clipboard.writeText(APP_URL);$("qs").textContent="Lien copié.";
+  }catch(e){
+    if(e&&e.name==="AbortError")return;
+    try{await navigator.clipboard.writeText(APP_URL);$("qs").textContent="Envoi impossible : lien copié à la place."}catch(_){$("qs").textContent="Partage impossible."}
+  }
+};
 $("dgb").onclick=diag;
 $("bk").onclick=async()=>{
   if(!Mesh){$("qs").textContent="Disponible dans l'application installée.";return}

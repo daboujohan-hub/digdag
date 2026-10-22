@@ -132,6 +132,33 @@ Prends la version du plugin ML Kit de la même version majeure que Capacitor.
 - Chaîne A → C → B simulée dans un navigateur : annonces relayées, message livré à B, réponse de B livrée à A, le relais C ne stocke que du texte chiffré, un paquet modifié est rejeté, un code contact falsifié est refusé.
 - **Non testé** : le vrai réseau Bluetooth / Wi-Fi sur téléphones et le scan caméra. À essayer avec 3 appareils Android.
 
+## Statistiques
+
+Chaque paquet porte un compteur de sauts (`ttl`, 8 au départ, réduit d'un à chaque relais). À la réception : **relais traversés = 8 − ttl**. L'écran Contacts > Statistiques affiche le nombre de messages reçus, les relais traversés (moyenne et maximum), le délai d'arrivée (approximatif : il compare les horloges de deux téléphones), le nombre de messages relayés par ce téléphone et d'appareils rencontrés. Chaque message reçu affiche aussi « N relais · durée ».
+
+## Partager l'application
+
+Contacts > Inviter > « Envoyer l'application à quelqu'un » copie l'APK de l'app installée et ouvre le menu de partage d'Android (Bluetooth, Partage à proximité, WhatsApp...). Cela marche sans Internet. Le QR code affiche en plus l'adresse du site.
+
+## Identifiants : comment éviter les confusions
+
+- L'identifiant (10 caractères) vient de l'empreinte SHA-256 de la clé publique : deux téléphones n'ont pas le même identifiant, et personne ne peut en annoncer un faux sans la clé correspondante.
+- Alphabet de 32 caractères sans 0, O, 1 ni I, en majuscules : pas de confusion à la lecture ou à la saisie.
+- 32^10 ≈ 10^15 possibilités : le risque que deux utilisateurs reçoivent le même identifiant par hasard est négligeable (environ 0,05 % avec un million d'utilisateurs).
+- Les noms ne sont pas uniques : l'app affiche toujours **nom + 4 derniers caractères** (« Aminata #K7QX »), et la saisie du destinataire propose les contacts connus.
+- Contact vérifié en personne par QR code : ✓.
+- Réinstaller l'app crée de nouvelles clés, donc un **nouvel identifiant** (pas de sauvegarde pour l'instant).
+
+## Appareils sans l'application
+
+Un téléphone sans l'application ne peut pas relayer un message : le relais demande du code qui tourne sur l'appareil. Pistes :
+1. Faciliter l'installation (bouton d'envoi de l'APK, sans Internet).
+2. **Relais fixes** : un vieux téléphone Android avec l'app, branché en permanence dans une boutique ou une gare, relaie sans dépendre des passants.
+
+## Test interne
+
+Contacts > « Test interne » vérifie sur le téléphone, sans second appareil : chiffrement, rejet d'un paquet modifié, identifiants, QR code, et acceptation des paquets par le service réseau.
+
 ## Limites connues
 
 - Le service d'arrière-plan affiche une notification permanente « Messagerie active ». Certaines marques (Tecno, Infinix, Xiaomi, etc.) arrêtent les apps en veille : utilise le bouton « Rester actif en arrière-plan » de l'écran Contacts, et désactive l'économie de batterie pour l'app.

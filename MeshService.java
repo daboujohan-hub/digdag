@@ -20,6 +20,7 @@ import com.google.android.gms.nearby.connection.*;
 import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -56,6 +57,8 @@ public class MeshService extends Service {
     // état visible dans l'écran de diagnostic
     volatile String advState = "démarrage…", discState = "démarrage…", lastError = "";
     volatile int found = 0;
+    volatile long relayed = 0;                       // messages retransmis par ce téléphone
+    final Set<String> met = ConcurrentHashMap.newKeySet(); // identifiants d'appareils rencontrés
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final Runnable retry = new Runnable() {
         @Override public void run() {
@@ -74,6 +77,8 @@ public class MeshService extends Service {
         prefs = getSharedPreferences("mesh", MODE_PRIVATE);
         try { relay = new JSONArray(prefs.getString("relay", "[]")); } catch (Exception e) { relay = new JSONArray(); }
         try { inbox = new JSONArray(prefs.getString("inbox", "[]")); } catch (Exception e) { inbox = new JSONArray(); }
+        relayed = prefs.getLong("relayed", 0);
+        met.addAll(prefs.getStringSet("met", new HashSet<String>()));
         for (int i = 0; i < relay.length(); i++) {
             JSONObject r = relay.optJSONObject(i);
             if (r != null && r.optJSONObject("p") != null) seen.add(r.optJSONObject("p").optString("id"));
@@ -193,6 +198,8 @@ public class MeshService extends Service {
     private final ConnectionLifecycleCallback lifecycle = new ConnectionLifecycleCallback() {
         @Override
         public void onConnectionInitiated(@NonNull String endpointId, @NonNull ConnectionInfo info) {
+            String who = info.getEndpointName();
+            if (who != null && who.length() == 10 && met.add(who)) prefs.edit().putStringSet("met", new HashSet<>(met)).apply();
             client.acceptConnection(endpointId, payloads);
         }
         @Override
@@ -348,6 +355,7 @@ public class MeshService extends Service {
             try { c.put("ttl", ttl - 1); } catch (Exception e) { return; }
             keep(c, false);
             broadcast(c.toString());
+            if (isMsg) { relayed++; prefs.edit().putLong("relayed", relayed).apply(); }
         }
     }
 
