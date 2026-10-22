@@ -1,0 +1,4 @@
+DIG.DAG - messagerie mesh (Capacitor)
+www/index.html : la page de l'application
+a-copier-dans-android/ : les 2 fichiers Android, à copier dans
+  android/app/src/main/java/<chemin du paquet>/ après "npx cap add android"

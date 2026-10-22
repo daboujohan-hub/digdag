@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Messagerie</title>
+<style>
+:root{--bg:#e9efec;--ink:#17302b;--mute:#5d7a73;--me:#1f6f5c;--wait:#c9830a;--line:#cfdcd7}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{font:16px/1.4 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;background:var(--bg);color:var(--ink);display:flex;flex-direction:column;padding-top:env(safe-area-inset-top,0)}
+header{display:flex;align-items:center;gap:10px;padding:10px 14px;background:#fff;border-bottom:1px solid var(--line)}
+header .t{flex:1}
+h1{font-size:17px;margin:0}
+#state{font-size:13px;color:var(--mute)}
+#state.off{color:var(--wait);font-weight:600}
+#me{font:600 13px ui-monospace,Menlo,Consolas,monospace;user-select:all;background:var(--bg);padding:6px 8px;border-radius:8px}
+button{font:inherit;border:0;border-radius:10px;padding:8px 14px;background:var(--me);color:#fff;cursor:pointer}
+button:focus-visible,input:focus-visible{outline:3px solid #7cc4b0;outline-offset:2px}
+#list{flex:1;overflow-y:auto;padding:14px;display:flex;flex-direction:column;gap:6px}
+.m{max-width:82%;padding:8px 12px;border-radius:16px 16px 16px 4px;background:#fff;word-wrap:break-word}
+.m.me{align-self:flex-end;background:var(--me);color:#fff;border-radius:16px 16px 4px 16px}
+.m small{display:block;font-size:11px;opacity:.75;margin-top:2px;text-align:right}
+.m.w small{color:#ffd68a;opacity:1}
+.empty{margin:auto;text-align:center;color:var(--mute);max-width:270px}
+#f{display:flex;flex-direction:column;gap:6px;padding:10px 14px calc(10px + env(safe-area-inset-bottom,0));background:#fff;border-top:1px solid var(--line)}
+#f .r{display:flex;gap:8px}
+#c{color:var(--mute);font-size:12px;text-align:right}
+input{font:inherit;flex:1;min-width:0;padding:10px 12px;border:1px solid var(--line);border-radius:12px}
+#to{font-family:ui-monospace,Menlo,Consolas,monospace;text-transform:uppercase}
+#setup{position:fixed;inset:0;background:var(--bg);display:flex;align-items:center;justify-content:center;padding:24px}
+#setup form{display:flex;flex-direction:column;gap:8px;background:#fff;border-radius:16px;padding:20px;width:100%;max-width:340px}
+#setup h2{margin:0;font-size:19px}
+#setup p{margin:0;color:var(--mute);font-size:14px}
+.hide{display:none!important}
+</style>
+</head>
+<body>
+<header>
+  <div class="t"><h1>Messagerie</h1><div id="state" aria-live="polite"></div></div>
+  <div id="me" title="Ton identifiant : donne-le à tes contacts"></div>
+</header>
+<div id="list"></div>
+<form id="f">
+  <input id="to" placeholder="ID du destinataire (10 caractères)" required maxlength="10" pattern="[A-Za-z0-9]{10}" autocomplete="off" aria-label="Identifiant du destinataire">
+  <div class="r"><input id="t" placeholder="Message chiffré" maxlength="200" autocomplete="off" aria-label="Message"><button>Envoyer</button></div>
+  <small id="c">0/200</small>
+</form>
+
+<div id="setup" class="hide">
+  <form id="sf">
+    <h2>Bienvenue</h2>
+    <p>Choisis ton nom. L'app crée tes clés de chiffrement et un identifiant de 10 caractères que tes contacts utiliseront pour t'écrire.</p>
+    <input id="n" placeholder="Ton nom" required maxlength="30" aria-label="Ton nom">
+    <button>Créer mon identifiant</button>
+  </form>
+</div>
+
+<script>
+const K="mesh.v2",MAX=200,TTL=8;
+let S={me:"",name:"",pub:"",jwk:null,dir:{},msgs:[],seen:[],relay:[],inbox:[]};
+try{S=Object.assign(S,JSON.parse(localStorage.getItem(K)||"{}"))}catch(e){}
+const $=id=>document.getElementById(id);
+const save=()=>{try{localStorage.setItem(K,JSON.stringify(S))}catch(e){}};
+const AL="ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+const rid=n=>Array.from(crypto.getRandomValues(new Uint8Array(n)),x=>AL[x%32]).join("");
+const hm=t=>new Date(t).toLocaleTimeString("fr",{hour:"2-digit",minute:"2-digit"});
+const enc=s=>new TextEncoder().encode(s),dec=b=>new TextDecoder().decode(b);
+const b64e=u=>btoa(String.fromCharCode(...new Uint8Array(u)));
+const b64d=s=>Uint8Array.from(atob(s),c=>c.charCodeAt(0));
+const Mesh=window.Capacitor&&Capacitor.Plugins&&Capacitor.Plugins.Mesh;
+let peers=0,PRIV=null;
+const keys=new Map(),EC={name:"ECDH",namedCurve:"P-256"};
+
+/* ---------- chiffrement : ECDH P-256 + HKDF + AES-GCM ---------- */
+// L'identifiant = empreinte de la clé publique : impossible d'annoncer une fausse clé pour un ID.
+const idOf=async pub=>Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256",b64d(pub))).slice(0,10),x=>AL[x%32]).join("");
+async function keyFor(id){
+  if(keys.has(id))return keys.get(id);
+  const pub=await crypto.subtle.importKey("raw",b64d(S.dir[id].pub),EC,false,[]);
+  const bits=await crypto.subtle.deriveBits({name:"ECDH",public:pub},PRIV,256);
+  const hk=await crypto.subtle.importKey("raw",bits,"HKDF",false,["deriveKey"]);
+  const k=await crypto.subtle.deriveKey({name:"HKDF",hash:"SHA-256",salt:new Uint8Array(0),info:enc("mesh-v1")},hk,{name:"AES-GCM",length:256},false,["encrypt","decrypt"]);
+  keys.set(id,k);return k;
+}
+const aad=p=>enc(p.id+"|"+p.from+"|"+p.to+"|"+p.ts); // lie l'en-tête au contenu : toute modification casse le déchiffrement
+
+async function seal(m){
+  const iv=crypto.getRandomValues(new Uint8Array(12));
+  const ct=await crypto.subtle.encrypt({name:"AES-GCM",iv,additionalData:aad(m)},await keyFor(m.to),enc(m.text));
+  const p={t:"m",id:m.id,from:m.from,to:m.to,ts:m.ts,ttl:TTL,iv:b64e(iv),ct:b64e(ct)};
+  keep(p);m.st="p";save();render();flush();
+}
+async function open(p){ // 1 = ok, 0 = clé de l'expéditeur inconnue, -1 = rejeté
+  if(!S.dir[p.from]||!S.dir[p.from].pub)return 0;
+  try{
+    const pt=await crypto.subtle.decrypt({name:"AES-GCM",iv:b64d(p.iv),additionalData:aad(p)},await keyFor(p.from),b64d(p.ct));
+    S.msgs.push({id:p.id,from:p.from,to:p.to,text:dec(pt).slice(0,MAX),ts:p.ts,st:"r"});
+    S.msgs.sort((a,b)=>a.ts-b.ts);return 1;
+  }catch(e){return -1}
+}
+async function retry(id){
+  for(const m of S.msgs.filter(x=>x.st==="k"&&x.to===id))await seal(m);
+  const box=S.inbox;S.inbox=[];
+  for(const p of box){if(p.from!==id||await open(p)===0)S.inbox.push(p)}
+}
+
+/* ---------- réseau ---------- */
+const str=(v,n)=>typeof v==="string"&&v.length<=n;
+const valid=p=>p&&str(p.id,16)&&p.id.length>=8&&(p.t==="h"||p.t==="m")&&str(p.from,10)&&p.from.length===10&&
+  Number.isFinite(p.ts)&&Number.isInteger(p.ttl)&&p.ttl>=0&&p.ttl<=TTL&&
+  (p.t==="h"?str(p.name,30)&&str(p.pub,100)&&p.pub.length===88:
+   str(p.to,10)&&p.to.length===10&&str(p.iv,16)&&str(p.ct,1700));
+const pick=p=>p.t==="h"?{t:"h",id:p.id,from:p.from,name:p.name,pub:p.pub,ts:p.ts,ttl:p.ttl}:
+  {t:"m",id:p.id,from:p.from,to:p.to,ts:p.ts,iv:p.iv,ct:p.ct,ttl:p.ttl};
+function tx(p){if(Mesh&&peers>0)Mesh.send({data:JSON.stringify(p)})}
+function keep(p){
+  const now=Date.now();
+  S.relay=S.relay.filter(r=>r.exp>now&&r.p.id!==p.id);
+  S.relay.push({p,exp:now+864e5});S.relay=S.relay.slice(-100);
+}
+function hello(){tx({t:"h",id:rid(12),from:S.me,name:S.name,pub:S.pub,ts:Date.now(),ttl:TTL})}
+function flush(){
+  if(peers<1)return;
+  S.relay.forEach(r=>tx(r.p));
+  S.msgs.forEach(m=>{if(m.st==="p")m.st="s"});
+  save();render();
+}
+async function onPacket(raw){
+  try{
+    let p=JSON.parse(raw);
+    if(!valid(p)||S.seen.includes(p.id))return;
+    S.seen.push(p.id);S.seen=S.seen.slice(-500);
+    p=pick(p);
+    if(p.t==="h"){
+      if(p.from===S.me||await idOf(p.pub)!==p.from)return;
+      S.dir[p.from]={name:p.name,pub:p.pub};
+      if(p.ttl>0){const q={...p,ttl:p.ttl-1};keep(q);tx(q)}
+      await retry(p.from);
+    }else if(p.to===S.me){
+      if(await open(p)===0){S.inbox.push(p);S.inbox=S.inbox.slice(-50)}
+    }else if(p.ttl>0){ // relais : le paquet reste chiffré, aucune clé nécessaire
+      const q={...p,ttl:p.ttl-1};keep(q);tx(q);
+    }
+    save();render();
+  }catch(e){}
+}
+
+/* ---------- interface ---------- */
+function render(){
+  const pend=S.msgs.filter(m=>m.st==="p"||m.st==="k").length,st=$("state");
+  st.className=(!Mesh||peers>0)?"":"off";
+  st.textContent=!Mesh?"Mode démo (navigateur)":peers>0?peers+" appareil"+(peers>1?"s":"")+" proche"+(peers>1?"s":""):"Aucun appareil proche"+(pend?" · "+pend+" en attente":"");
+  $("me").textContent=S.me?"ID "+S.me:"";
+  const l=$("list");l.textContent="";
+  if(!S.msgs.length){const e=document.createElement("div");e.className="empty";e.textContent="Aucun message. Écris à un identifiant : le message part chiffré dès qu'un appareil est à portée.";l.append(e)}
+  const lab={k:" · clé du destinataire pas encore reçue",p:" · en attente",s:" · transmis"};
+  S.msgs.forEach(m=>{
+    const mine=m.from===S.me,d=document.createElement("div");
+    d.className="m"+(mine?" me":"")+(m.st==="p"||m.st==="k"?" w":"");
+    const b=document.createElement("span");b.textContent=m.text;
+    const s=document.createElement("small");
+    s.textContent=mine?"à "+m.to+" · "+hm(m.ts)+(lab[m.st]||""):((S.dir[m.from]||{}).name||m.from)+" · "+hm(m.ts);
+    d.append(b,s);l.append(d);
+  });
+  l.scrollTop=l.scrollHeight;
+}
+$("t").oninput=()=>{$("c").textContent=$("t").value.length+"/"+MAX};
+$("f").onsubmit=async e=>{
+  e.preventDefault();
+  const v=$("t").value.trim();if(!v)return;
+  const m={id:rid(12),from:S.me,to:$("to").value.trim().toUpperCase(),text:v.slice(0,MAX),ts:Date.now(),st:"k"};
+  S.seen.push(m.id);S.msgs.push(m);
+  $("t").value="";$("c").textContent="0/"+MAX;save();render();
+  if(!Mesh){ // aperçu navigateur : réponse simulée, sans réseau
+    m.st="s";S.dir.DEMO234567={name:"Aminata (démo)"};
+    setTimeout(()=>{S.msgs.push({id:rid(12),from:"DEMO234567",to:S.me,text:"Bien reçu : "+m.text.slice(0,60),ts:Date.now(),st:"r"});save();render()},1200);
+    save();render();return;
+  }
+  if(S.dir[m.to]&&S.dir[m.to].pub)await seal(m);
+};
+$("sf").onsubmit=async e=>{
+  e.preventDefault();
+  const kp=await crypto.subtle.generateKey(EC,true,["deriveBits"]);
+  S.jwk=await crypto.subtle.exportKey("jwk",kp.privateKey);
+  S.pub=b64e(await crypto.subtle.exportKey("raw",kp.publicKey));
+  S.me=await idOf(S.pub);S.name=$("n").value.trim();PRIV=kp.privateKey;
+  save();$("setup").classList.add("hide");render();boot(true);
+};
+
+let ready=false,hooked=false;
+async function boot(ask){
+  if(!Mesh||!S.me||ready)return;
+  try{
+    const r=await Mesh.start({id:S.me,ask:!!ask});
+    if(!r.ok)return;
+    ready=true;
+    if(!hooked){
+      hooked=true;
+      Mesh.addListener("packet",e=>onPacket(e.data));
+      Mesh.addListener("peer",e=>{const up=e.n>peers;peers=e.n;render();if(up){hello();flush()}});
+    }
+  }catch(e){}
+}
+setInterval(()=>boot(false),5000);
+document.addEventListener("visibilitychange",()=>{if(!document.hidden)boot(false)});
+
+(async()=>{
+  if(!crypto.subtle){$("state").textContent="Chiffrement indisponible ici";return}
+  if(S.jwk)PRIV=await crypto.subtle.importKey("jwk",S.jwk,EC,false,["deriveBits"]);
+  if(!S.me)$("setup").classList.remove("hide");
+  render();boot(true);
+})();
+</script>
+</body>
+</html>
