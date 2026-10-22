@@ -42,6 +42,8 @@ button.o[aria-pressed=true]{background:var(--me);color:#fff;border-color:var(--m
 #qr{background:#fff;border-radius:12px;padding:8px;max-width:100%}
 #qcap,#qs{text-align:center;color:var(--mute);font-size:14px;max-width:320px;margin:0}
 #qs{color:var(--ink);font-weight:600}
+#dg{font-size:12px;white-space:pre-wrap;background:#fff;border:1px solid var(--line);border-radius:10px;padding:8px;width:100%;max-width:340px;margin:0;font-family:ui-monospace,Menlo,Consolas,monospace}
+#dg:empty{display:none}
 </style>
 </head>
 <body>
@@ -66,6 +68,8 @@ button.o[aria-pressed=true]{background:var(--me);color:#fff;border-color:var(--m
   <button class="o" id="bk" type="button">Rester actif en arrière-plan</button>
   <div class="row"><input id="pc" placeholder="Ou colle un code contact" aria-label="Code contact"><button id="pa" type="button">Ajouter</button></div>
   <p id="qs" aria-live="polite"></p>
+  <button class="o" id="dgb" type="button">Diagnostic du réseau</button>
+  <pre id="dg"></pre>
   <button class="o" id="qx" type="button">Fermer</button>
   <footer>Développé par daboujohan · daboujohan-hub.github.io</footer>
 </div>
@@ -318,11 +322,26 @@ async function addCard(raw){
   S.dir[id]={name,pub,ok:true};save();await retry(id);render();
   return "Contact ajouté : "+name+" ✓";
 }
-$("cb").onclick=()=>{if(!S.me)return;$("qs").textContent="";$("pc").value="";$("qb").classList.remove("hide");showQR("c")};
+$("cb").onclick=()=>{if(!S.me)return;$("qs").textContent="";$("pc").value="";$("qb").classList.remove("hide");showQR("c");diag()};
 $("qx").onclick=()=>$("qb").classList.add("hide");
 $("tc").onclick=()=>showQR("c");$("ti").onclick=()=>showQR("i");
 $("cp").onclick=async()=>{try{await navigator.clipboard.writeText(card());$("qs").textContent="Code copié."}catch(e){$("qs").textContent="Copie impossible."}};
 $("pa").onclick=async()=>{$("qs").textContent=await addCard($("pc").value);$("pc").value=""};
+async function diag(){
+  const el=$("dg");
+  if(!Mesh){el.textContent="Mode démo : le plugin réseau n'est pas dans cet APK.";return}
+  try{
+    const d=await Mesh.diag(),y=v=>v?"oui":"NON";
+    el.textContent=[
+      "Android API "+d.sdk+" · Bluetooth : "+y(d.bt)+" · Wi-Fi : "+y(d.wifi)+" · Localisation : "+y(d.loc),
+      "Autorisations manquantes : "+((d.missing||[]).join(", ")||"aucune"),
+      "Google Play Services : "+(d.gms===0?"OK":"problème (code "+d.gms+")"),
+      "Service : "+(d.service?"actif":"ARRÊTÉ")+" · Publicité : "+(d.adv||"—")+" · Recherche : "+(d.disc||"—"),
+      "Appareils vus : "+(d.found||0)+" · connectés : "+(d.peers||0),
+      "Dernière erreur : "+(d.err||"aucune")].join("\n");
+  }catch(e){el.textContent="Diagnostic indisponible (ancienne version du plugin) : "+e.message}
+}
+$("dgb").onclick=diag;
 $("bk").onclick=async()=>{
   if(!Mesh){$("qs").textContent="Disponible dans l'application installée.";return}
   try{await Mesh.keepAlive();$("qs").textContent="Choisis « Autoriser » : l'app restera active écran éteint."}

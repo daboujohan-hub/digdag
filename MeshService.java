@@ -9,7 +9,9 @@ import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.ServiceInfo;
 import android.os.Build;
+import android.os.Handler;
 import android.os.IBinder;
+import android.os.Looper;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.core.app.NotificationCompat;
@@ -51,6 +53,20 @@ public class MeshService extends Service {
     private SharedPreferences prefs;
     private ConnectionsClient client;
 
+    // état visible dans l'écran de diagnostic
+    volatile String advState = "démarrage…", discState = "démarrage…", lastError = "";
+    volatile int found = 0;
+    private final Handler handler = new Handler(Looper.getMainLooper());
+    private final Runnable retry = new Runnable() {
+        @Override public void run() {
+            if (client != null) {
+                if (advState.startsWith("erreur") && !advState.contains("ALREADY")) startAdvertising();
+                if (discState.startsWith("erreur") && !discState.contains("ALREADY")) startDiscovery();
+            }
+            handler.postDelayed(this, 30000);
+        }
+    };
+
     @Override
     public void onCreate() {
         super.onCreate();
@@ -88,7 +104,13 @@ public class MeshService extends Service {
             if (Build.VERSION.SDK_INT >= 29) startForeground(1, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE);
             else startForeground(1, n);
         } catch (Exception e) { stopSelf(); return START_NOT_STICKY; }
-        if (!started) { started = true; startNearby(); }
+        if (!started) {
+            started = true;
+            client = Nearby.getConnectionsClient(this);
+            startAdvertising();
+            startDiscovery();
+            handler.postDelayed(retry, 30000);
+        }
         return START_STICKY;
     }
 
@@ -97,6 +119,7 @@ public class MeshService extends Service {
     @Override
     public void onDestroy() {
         instance = null;
+        handler.removeCallbacks(retry);
         if (client != null) { client.stopAllEndpoints(); client.stopAdvertising(); client.stopDiscovery(); }
         super.onDestroy();
     }
@@ -138,22 +161,30 @@ public class MeshService extends Service {
     }
 
     /* ---------- réseau ---------- */
-    private void startNearby() {
-        client = Nearby.getConnectionsClient(this);
+    private void startAdvertising() {
+        advState = "démarrage…";
         client.startAdvertising(myId, SERVICE_ID, lifecycle,
             new AdvertisingOptions.Builder().setStrategy(Strategy.P2P_CLUSTER).build())
-            .addOnFailureListener(e -> {});
+            .addOnSuccessListener(v -> advState = "actif")
+            .addOnFailureListener(e -> advState = "erreur : " + e.getMessage());
+    }
+
+    private void startDiscovery() {
+        discState = "démarrage…";
         client.startDiscovery(SERVICE_ID, discovery,
             new DiscoveryOptions.Builder().setStrategy(Strategy.P2P_CLUSTER).build())
-            .addOnFailureListener(e -> {});
+            .addOnSuccessListener(v -> discState = "actif")
+            .addOnFailureListener(e -> discState = "erreur : " + e.getMessage());
     }
 
     private final EndpointDiscoveryCallback discovery = new EndpointDiscoveryCallback() {
         @Override
         public void onEndpointFound(@NonNull String endpointId, @NonNull DiscoveredEndpointInfo info) {
             // un seul des deux appareils lance la connexion (évite les doublons)
+            found++;
             if (myId.compareTo(info.getEndpointName()) < 0 && !peers.contains(endpointId)) {
-                client.requestConnection(myId, endpointId, lifecycle);
+                client.requestConnection(myId, endpointId, lifecycle)
+                    .addOnFailureListener(e -> lastError = "connexion : " + e.getMessage());
             }
         }
         @Override public void onEndpointLost(@NonNull String endpointId) {}
@@ -167,6 +198,7 @@ public class MeshService extends Service {
         @Override
         public void onConnectionResult(@NonNull String endpointId, @NonNull ConnectionResolution result) {
             if (result.getStatus().isSuccess()) onPeerUp(endpointId);
+            else lastError = "connexion refusée (code " + result.getStatus().getStatusCode() + ")";
         }
         @Override
         public void onDisconnected(@NonNull String endpointId) {

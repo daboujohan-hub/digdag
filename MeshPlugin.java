@@ -1,13 +1,18 @@
 package com.exemple.messagerie;
 
 import android.Manifest;
+import android.bluetooth.BluetoothAdapter;
+import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
+import android.location.LocationManager;
 import android.net.Uri;
+import android.net.wifi.WifiManager;
 import android.os.Build;
 import android.provider.Settings;
 import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
+import com.google.android.gms.common.GoogleApiAvailability;
 import com.getcapacitor.JSArray;
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
@@ -41,9 +46,8 @@ public class MeshPlugin extends Plugin implements MeshService.Sink {
             p.add(Manifest.permission.BLUETOOTH_ADVERTISE);
             p.add(Manifest.permission.BLUETOOTH_CONNECT);
             p.add(Manifest.permission.BLUETOOTH_SCAN);
-        } else {
-            p.add(Manifest.permission.ACCESS_FINE_LOCATION);
         }
+        if (Build.VERSION.SDK_INT <= 31) p.add(Manifest.permission.ACCESS_FINE_LOCATION);
         if (Build.VERSION.SDK_INT >= 33) p.add(Manifest.permission.NEARBY_WIFI_DEVICES);
         return p;
     }
@@ -123,6 +127,40 @@ public class MeshPlugin extends Plugin implements MeshService.Sink {
             getContext().startActivity(i);
         }
         call.resolve();
+    }
+
+    @PluginMethod
+    public void diag(PluginCall call) {
+        JSObject r = new JSObject();
+        JSArray missing = new JSArray();
+        for (String p : required()) if (!granted(p)) missing.put(p.substring(p.lastIndexOf('.') + 1));
+        r.put("missing", missing);
+        r.put("sdk", Build.VERSION.SDK_INT);
+        Context c = getContext().getApplicationContext();
+        try {
+            BluetoothAdapter bt = BluetoothAdapter.getDefaultAdapter();
+            r.put("bt", bt != null && bt.isEnabled());
+        } catch (Exception e) { r.put("bt", false); }
+        try {
+            WifiManager w = (WifiManager) c.getSystemService(Context.WIFI_SERVICE);
+            r.put("wifi", w != null && w.isWifiEnabled());
+        } catch (Exception e) { r.put("wifi", false); }
+        try {
+            LocationManager l = (LocationManager) c.getSystemService(Context.LOCATION_SERVICE);
+            r.put("loc", Build.VERSION.SDK_INT < 28 || (l != null && l.isLocationEnabled()));
+        } catch (Exception e) { r.put("loc", false); }
+        try { r.put("gms", GoogleApiAvailability.getInstance().isGooglePlayServicesAvailable(c)); }
+        catch (Exception e) { r.put("gms", -1); }
+        MeshService s = MeshService.instance;
+        r.put("service", s != null);
+        if (s != null) {
+            r.put("adv", s.advState);
+            r.put("disc", s.discState);
+            r.put("found", s.found);
+            r.put("peers", s.peerCount());
+            r.put("err", s.lastError);
+        }
+        call.resolve(r);
     }
 
     @Override
